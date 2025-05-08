@@ -1,0 +1,105 @@
+################################
+# Read in system verilog files #
+################################
+
+read_file -format sverilog { ./rst_synch.sv ./IR_intf.sv ./inert_intf.sv ./inertial_integrator.sv ./SPI_mnrch.sv ./sponge.sv ./cmd_proc.sv ./PID.sv ./PWM11.sv ./MtrDrv.sv ./TourCmd.sv ./TourLogic.sv ./UART_wrapper.sv ./UART.v ./UART_rx.sv ./UART_tx.sv ./KnightsTour.sv }
+
+#######################################################
+# Set the current design to KnightsTour for synthesis #
+#######################################################
+
+set current_design KnightsTour
+link
+
+#########################################################################################
+# Define a 333MHz clock signal (3.0 ns period) with a 50% duty cycle.			#				#											#
+# Set a "don't touch" attribute on the clock network to avoid unintended optimizations. #
+#########################################################################################
+
+create_clock -name "clk" -period 3.0 -waveform {0 1.5} {clk}
+set_dont_touch_network [find port clk]
+
+############################################################################
+# Define input delays of 0.4 ns on all primary inputs, excluding the clock #
+############################################################################
+
+set prim_inputs [remove_from_collection [all_inputs] [find port clk]]
+set_input_delay -clock clk 0.4 [copy_collection $prim_inputs]
+
+###################################################################################
+# Assign a drive strength to the primary inputs equivalent to a 2-input NAND gate #
+# from the Synopsys 32nm library (NAND2X2_LVT), excluding the clock input	  #
+###################################################################################
+
+set_driving_cell -lib_cell NAND2X2_LVT -library saed32lvt_tt0p85v25c [copy_collection $prim_inputs]
+
+###########################################################################
+# Set a "don't touch" attribute on the asynchronous reset network (rst_n) #
+# to prevent unwanted modifications during synthesis			  #
+###########################################################################
+
+set_dont_touch_network [get_net iRST/rst_n]
+
+#################################################################################
+# Define an output delay of 0.4 ns for all outputs relative to the clock signal #
+#################################################################################
+
+set_output_delay -clock clk 0.4 [all_outputs]
+
+###################################################################################################
+# Set a capacitive load of 0.10 pF for all output ports to simulate real-world loading conditions #
+###################################################################################################
+
+set_load 0.10 [all_outputs]
+
+####################################################################
+# Restrict maximum signal transition time to 0.15 ns for all nodes #
+####################################################################
+
+set_max_transition 0.15 [current_design]
+
+##################################################################################
+# Apply the Synopsys 32nm wire load model for an area up to 16000 square microns #
+# to estimate parasitic capacitance and resistance within the design			 #
+##################################################################################
+
+set_wire_load_model -name 16000 -library saed32lvt_tt0p85v25c
+
+#####################################################################
+# Compile the design with initial synthesis and optimization passes #
+# Check design constraints, then flatten hierarchy and recompile    #
+#####################################################################
+
+compile -map_effort high
+
+#####################################################################
+# Clock Uncertainty						    #
+#####################################################################
+
+set_clock_uncertainty 0.15 clk
+set_fix_hold clk
+
+# Flatten
+
+ungroup -all -flatten
+compile -map_effort medium
+
+######################################################################
+# Generate and display timing reports for minimum and maximum delays #
+######################################################################
+
+check_design
+report_timing -path full -delay min > KnightsTour_hold.txt
+report_timing -path full -delay max > KnightsTour_setup.txt
+
+######################################################################
+# Generate an area report and save it to a text file (UART_area.txt) #
+######################################################################
+
+report_area > KnightsTour_area.txt
+
+#############################################################################################
+# Write out the synthesized design's gate-level netlist in Verilog format as KnightsTour.vg # 
+#############################################################################################
+
+write -format verilog KnightsTour -output KnightsTour.vg
